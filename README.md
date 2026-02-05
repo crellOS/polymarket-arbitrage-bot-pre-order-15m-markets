@@ -1,4 +1,4 @@
-# Polymarket Trading Bot – BTC & ETH Binary Markets
+# Polymarket Arbitrage Trading Bot – BTC (&ETH) Binary Markets
 
 **Rust trading bot for Polymarket prediction markets.** Automates hedging and position management on BTC and ETH binary (Up/Down) markets with 15m and 1h timeframes. Lock profit when cost per pair is favorable; expand positions when the opposite side is rising and PnL is skewed.
 
