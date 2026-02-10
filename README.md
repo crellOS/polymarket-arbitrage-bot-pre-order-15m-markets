@@ -142,7 +142,11 @@ For questions, support, or collaboration around this Polymarket trading bot, rea
 
 ## Contact
 
-[![Cakaroni](https://t.me/cakaroni)
+<div align="left">
+  <a href="https://t.me/cakaroni">
+    <img height="30" src="https://img.shields.io/badge/Telegram-26A5E4?style=for-the-badge&logo=telegram&logoColor=white">
+  </a>
+</div>
 
 ---
 
