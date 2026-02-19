@@ -1,5 +1,4 @@
 use crate::api::PolymarketApi;
-use crate::models::Market;
 use anyhow::Result;
 use chrono::{Datelike, TimeZone, Timelike};
 use chrono_tz::America::New_York;
@@ -70,6 +69,34 @@ impl MarketDiscovery {
             .unwrap();
 
         hour_start_et.timestamp()
+    }
+
+    /// 15m market slug format: btc-updown-15m-{period_start_timestamp}
+    pub fn build_15m_slug(asset_ticker: &str, period_start_et: i64) -> String {
+        let asset = asset_ticker.to_lowercase();
+        format!("{}-updown-15m-{}", asset, period_start_et)
+    }
+
+    /// Current 15-minute period start (ET), rounded down to :00, :15, :30, :45.
+    pub fn current_15m_period_start_et() -> i64 {
+        let now_utc = chrono::Utc::now();
+        let now_et = now_utc.with_timezone(&New_York);
+        let minute = now_et.minute();
+        let minute_floor = (minute / 15) * 15;
+
+        let period_start_et = New_York
+            .with_ymd_and_hms(
+                now_et.year(),
+                now_et.month(),
+                now_et.day(),
+                now_et.hour(),
+                minute_floor,
+                0,
+            )
+            .single()
+            .unwrap();
+
+        period_start_et.timestamp()
     }
 
     pub async fn get_market_tokens(&self, condition_id: &str) -> Result<(String, String)> {

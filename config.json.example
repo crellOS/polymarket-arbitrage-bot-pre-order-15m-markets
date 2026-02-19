@@ -1,0 +1,33 @@
+{
+  "polymarket": {
+    "gamma_api_url": "https://gamma-api.polymarket.com",
+    "clob_api_url": "https://clob.polymarket.com",
+    "api_key": "YOUR_POLYMARKET_API_KEY",
+    "api_secret": "YOUR_POLYMARKET_API_SECRET",
+    "api_passphrase": "YOUR_POLYMARKET_API_PASSPHRASE",
+    "private_key": "YOUR_WALLET_PRIVATE_KEY_HEX_NO_0x_PREFIX",
+    "proxy_wallet_address": "0xYourProxyWalletAddress",
+    "signature_type": 2
+  },
+  "strategy": {
+    "price_limit": 0.45,
+    "shares": 5,
+    "place_order_before_mins": 2,
+    "check_interval_ms": 500,
+    "simulation_mode": true,
+    "sell_opposite_above": 0.84,
+    "sell_opposite_time_remaining": 5,
+    "market_closure_check_interval_seconds": 60,
+    "signal": {
+      "enabled": true,
+      "stable_min": 0.35,
+      "stable_max": 0.65,
+      "clear_threshold": 0.9,
+      "clear_remaining_mins": 3,
+      "danger_price": 0.28,
+      "danger_time_passed": 10,
+      "one_side_buy_risk_management": "time",
+      "mid_market_enabled": true
+    }
+  }
+}

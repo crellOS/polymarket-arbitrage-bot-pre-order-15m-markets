@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
         eprintln!("🎮 SIMULATION MODE ENABLED - No real orders will be placed");
         eprintln!("   Orders will match when prices hit ${:.2} or below", config.strategy.price_limit);
     }
-    eprintln!("📈 Strategy: Placing Up/Down limit orders at ${:.2} for 1h markets (BTC, ETH, SOL, XRP)", config.strategy.price_limit);
+    eprintln!("📈 Strategy: Placing Up/Down limit orders at ${:.2} for 15m markets (BTC, ETH, SOL, XRP)", config.strategy.price_limit);
     if config.strategy.signal.enabled {
         eprintln!("   📡 Signal-based risk management: enabled (place on good signal, skip on bad, sell early on danger)");
     }

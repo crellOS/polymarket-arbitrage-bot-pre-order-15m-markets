@@ -1,6 +1,6 @@
 use crate::api::PolymarketApi;
 use crate::config::Config;
-use crate::discovery::{MarketDiscovery, ASSET_TO_SLUG};
+use crate::discovery::MarketDiscovery;
 use crate::models::*;
 use crate::signals::{self, MarketSignal};
 use anyhow::Result;
@@ -11,6 +11,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use log::{warn, info, error, debug};
+
+/// 15-minute market duration in seconds
+const MARKET_DURATION_SECS: i64 = 900;
+const MARKET_DURATION_SECS_U64: u64 = 900;
 
 pub struct PreLimitStrategy {
     api: Arc<PolymarketApi>,
@@ -90,7 +94,7 @@ impl PreLimitStrategy {
 
     async fn process_markets(&self) -> Result<()> {
         let assets = vec!["BTC", "ETH", "SOL", "XRP"];
-        let current_period_et = Self::get_current_1h_period_et();
+        let current_period_et = Self::get_current_15m_period_et();
         
         for asset in assets {
             self.process_asset(asset, current_period_et).await?;
@@ -98,9 +102,9 @@ impl PreLimitStrategy {
         Ok(())
     }
     
-    /// Calculate the current running 1-hour period timestamp in ET timezone
-    fn get_current_1h_period_et() -> i64 {
-        MarketDiscovery::current_1h_period_start_et()
+    /// Current 15-minute period start timestamp (ET)
+    fn get_current_15m_period_et() -> i64 {
+        MarketDiscovery::current_15m_period_start_et()
     }
     
     fn get_current_time_et() -> i64 {
@@ -114,7 +118,7 @@ impl PreLimitStrategy {
         let state = states.get(asset).cloned();
         
         let current_time_et = Self::get_current_time_et();
-        let next_period_start = current_period_et + 3600;
+        let next_period_start = current_period_et + MARKET_DURATION_SECS;
         let time_until_next = next_period_start - current_time_et;
 
         let needs_danger_handling = state.as_ref().map_or(false, |s| {
@@ -123,17 +127,17 @@ impl PreLimitStrategy {
         });
 
         if time_until_next <= (self.config.strategy.place_order_before_mins * 60) as i64 {
-            let is_next_market_prepared = state.as_ref().map_or(false, |s| s.expiry == next_period_start + 3600);
+            let is_next_market_prepared = state.as_ref().map_or(false, |s| s.expiry == next_period_start + MARKET_DURATION_SECS);
             
             if !is_next_market_prepared && !needs_danger_handling {
                 // Signal check: evaluate current market before placing pre-orders for next
                 let signal = self.get_place_signal(asset, current_period_et).await;
                 if signal != MarketSignal::Good {
                     if signal == MarketSignal::Bad {
-                        log::info!("{} | Bad signal for current market — skipping pre-orders for next hour", asset);
+                        log::info!("{} | Bad signal for current market — skipping pre-orders for next 15m", asset);
                     }
                 } else if let Some(next_market) = self.discover_next_market(asset, next_period_start).await? {
-                    log::info!("Preparing orders for next {} market (starts in {}s)", asset, time_until_next);
+                    log::info!("Preparing orders for next 15m {} market (starts in {}s)", asset, time_until_next);
                     let (up_token_id, down_token_id) = self.discovery.get_market_tokens(&next_market.condition_id).await?;
 
                     let price_limit = self.config.strategy.price_limit;
@@ -152,7 +156,7 @@ impl PreLimitStrategy {
                         up_matched: false,
                         down_matched: false,
                         merged: false,
-                        expiry: next_period_start + 3600,
+                        expiry: next_period_start + MARKET_DURATION_SECS,
                         risk_sold: false,
                         order_placed_at: current_time_et,
                         market_period_start: next_period_start,
@@ -181,7 +185,7 @@ impl PreLimitStrategy {
 
                 // Calculate time remaining in the current market period
                 let current_time_et = Self::get_current_time_et();
-                let market_end_time = s.market_period_start + 3600; // 1 hour market
+                let market_end_time = s.market_period_start + MARKET_DURATION_SECS;
                 let time_remaining_seconds = market_end_time - current_time_et;
                 let time_remaining_mins = time_remaining_seconds / 60;
                 let required_time_remaining_mins = self.config.strategy.sell_opposite_time_remaining as i64;
@@ -245,17 +249,14 @@ impl PreLimitStrategy {
             }
 
             let current_time_et = Self::get_current_time_et();
-            let time_since_market_start = current_time_et - s.market_period_start;
-            let sell_after_seconds = (self.config.strategy.sell_unmatched_after_mins * 60) as i64;
 
-            // Track when we first had only one side matched (for sell_after_danger_time_passed)
+            // Track when we first had only one side matched (for danger_time_passed)
             let only_one_matched = (s.up_matched && !s.down_matched) || (s.down_matched && !s.up_matched);
             if only_one_matched && s.one_side_matched_at.is_none() {
                 s.one_side_matched_at = Some(current_time_et);
             }
 
-            // One-side risk management: optional early sell (in addition to sell_unmatched_after_mins timeout)
-            // "price" = sell when matched token <= danger_price; "time" = sell after danger_time_passed mins
+            // One-side risk management: "price" = sell when matched token <= danger_price; "time" = sell after danger_time_passed mins
             let mode = match self.config.strategy.signal.one_side_buy_risk_management.to_lowercase().as_str() {
                 "price" | "sell_at_danger_price" => "price",
                 "time" | "sell_after_danger_time_passed" => "time",
@@ -277,7 +278,7 @@ impl PreLimitStrategy {
                         .map(|p| signals::is_danger_signal(&self.config.strategy.signal, p))
                         .unwrap_or(false)
                 }
-            } else if mode == "sell_after_danger_time_passed" {
+            } else if mode == "time" {
                 let danger_mins = self.config.strategy.signal.danger_time_passed as i64;
                 s.one_side_matched_at.map_or(false, |t| current_time_et - t >= danger_mins * 60)
             } else {
@@ -303,20 +304,13 @@ impl PreLimitStrategy {
                 }
             }
 
-            let should_sell = !s.merged && !s.risk_sold && (
-                should_sell_early ||
-                time_since_market_start >= sell_after_seconds
-            );
+            let should_sell = !s.merged && !s.risk_sold && should_sell_early;
 
             if should_sell {
-                let reason = if should_sell_early {
-                    if mode == "time" {
-                        format!("Danger time passed ({}min since match)", self.config.strategy.signal.danger_time_passed)
-                    } else {
-                        "Danger signal (price collapsed)".to_string()
-                    }
+                let reason = if mode == "time" {
+                    format!("Danger time passed ({}min since match)", self.config.strategy.signal.danger_time_passed)
                 } else {
-                    "Timeout reached".to_string()
+                    "Danger signal (price collapsed)".to_string()
                 };
                 if s.up_matched && !s.down_matched {
                     log::warn!("{}: {} — only Up token matched. Selling Up token and canceling Down order", asset, reason.as_str());
@@ -449,14 +443,14 @@ impl PreLimitStrategy {
             } else {
                 states.insert(asset.to_string(), s);
             }
-        } else if time_until_next > (self.config.strategy.place_order_before_mins * 60) as i64
+            } else if time_until_next > (self.config.strategy.place_order_before_mins * 60) as i64
             && self.config.strategy.signal.mid_market_enabled
         {
-            // Don't place mid-market orders if too little time remains — we'd hit timeout and sell at a loss.
-            let time_remaining_in_current_market = (current_period_et + 3600) - current_time_et;
-            let min_remaining_to_place = (self.config.strategy.sell_unmatched_after_mins * 60) as i64;
+            // Don't place mid-market orders if too little time remains — we'd hit danger_time_passed and sell at a loss.
+            let time_remaining_in_current_market = (current_period_et + MARKET_DURATION_SECS) - current_time_et;
+            let min_remaining_to_place = (self.config.strategy.signal.danger_time_passed * 60) as i64;
             if time_remaining_in_current_market < min_remaining_to_place {
-                log::debug!("{} | Skipping mid-market orders: only {}s left (need {}s to avoid immediate timeout)",
+                log::debug!("{} | Skipping mid-market orders: only {}s left (need {}s for danger_time_passed)",
                     asset, time_remaining_in_current_market, min_remaining_to_place);
             } else {
             let signal = self.get_place_signal(asset, current_period_et).await;
@@ -487,7 +481,7 @@ impl PreLimitStrategy {
                         up_matched: false,
                         down_matched: false,
                         merged: false,
-                        expiry: current_period_et + 3600,
+                        expiry: current_period_et + MARKET_DURATION_SECS,
                         risk_sold: false,
                         order_placed_at: current_time_et,
                         market_period_start: current_period_et,
@@ -504,12 +498,7 @@ impl PreLimitStrategy {
     }
 
     async fn get_market_snapshot(&self, asset: &str, period_start: i64) -> Option<(f64, f64, i64)> {
-        let asset_slug = ASSET_TO_SLUG
-            .iter()
-            .find(|(name, _)| *name == asset)
-            .map(|(_, slug)| *slug)
-            .unwrap_or("bitcoin");
-        let slug = MarketDiscovery::build_1h_slug(asset_slug, period_start);
+        let slug = MarketDiscovery::build_15m_slug(asset, period_start);
         let market = self.api.get_market_by_slug(&slug).await.ok()?;
         if !market.active || market.closed {
             return None;
@@ -522,7 +511,7 @@ impl PreLimitStrategy {
         let up_price = up_res.ok()?.to_string().parse::<f64>().ok()?;
         let down_price = down_res.ok()?.to_string().parse::<f64>().ok()?;
         let current_time_et = Self::get_current_time_et();
-        let market_end = period_start + 3600;
+        let market_end = period_start + MARKET_DURATION_SECS;
         let time_remaining = market_end - current_time_et;
         Some((up_price, down_price, time_remaining.max(0)))
     }
@@ -540,13 +529,7 @@ impl PreLimitStrategy {
     }
 
     async fn discover_next_market(&self, asset_name: &str, next_timestamp: i64) -> Result<Option<Market>> {
-        let asset_slug = ASSET_TO_SLUG
-            .iter()
-            .find(|(name, _)| *name == asset_name)
-            .map(|(_, slug)| *slug)
-            .unwrap_or("bitcoin");
-        
-        let slug = MarketDiscovery::build_1h_slug(asset_slug, next_timestamp);
+        let slug = MarketDiscovery::build_15m_slug(asset_name, next_timestamp);
         match self.api.get_market_by_slug(&slug).await {
             Ok(m) => {
                 if m.active && !m.closed {
@@ -691,7 +674,7 @@ impl PreLimitStrategy {
         CycleTrade {
             condition_id: s.condition_id.clone(),
             period_timestamp: s.market_period_start as u64,
-            market_duration_secs: 3600,
+            market_duration_secs: MARKET_DURATION_SECS_U64,
             up_token_id: Some(s.up_token_id.clone()),
             down_token_id: Some(s.down_token_id.clone()),
             up_shares,
@@ -705,7 +688,7 @@ impl PreLimitStrategy {
         CycleTrade {
             condition_id: s.condition_id.clone(),
             period_timestamp: s.market_period_start as u64,
-            market_duration_secs: 3600,
+            market_duration_secs: MARKET_DURATION_SECS_U64,
             up_token_id: Some(s.up_token_id.clone()),
             down_token_id: Some(s.down_token_id.clone()),
             up_shares: shares,
@@ -833,15 +816,9 @@ impl PreLimitStrategy {
         let mut states_to_check: Vec<String> = Vec::new();
         
         for asset in &assets {
-            let asset_slug = ASSET_TO_SLUG
-                .iter()
-                .find(|(name, _)| *name == *asset)
-                .map(|(_, slug)| *slug)
-                .unwrap_or("bitcoin");
-            
             if let Some(state) = states.get_mut(*asset) {
                 let market_period = state.market_period_start;
-                let slug = MarketDiscovery::build_1h_slug(asset_slug, market_period);
+                let slug = MarketDiscovery::build_15m_slug(asset, market_period);
                 
                 match self.api.get_market_by_slug(&slug).await {
                     Ok(market) => {
@@ -849,8 +826,7 @@ impl PreLimitStrategy {
                             let up_price_result = self.api.get_price(&state.up_token_id, "SELL").await;
                             let down_price_result = self.api.get_price(&state.down_token_id, "SELL").await;
                             
-                            // Calculate remaining time for the market where orders were placed (1h = 3600s)
-                            let market_end = market_period + 3600;
+                            let market_end = market_period + MARKET_DURATION_SECS;
                             let time_remaining = market_end - current_time_et;
                             let minutes = if time_remaining > 0 { time_remaining / 60 } else { 0 };
                             let seconds = if time_remaining > 0 { time_remaining % 60 } else { 0 };
@@ -913,8 +889,8 @@ impl PreLimitStrategy {
                     }
                 }
             } else {
-                let current_period_et = Self::get_current_1h_period_et();
-                let slug = MarketDiscovery::build_1h_slug(asset_slug, current_period_et);
+                let current_period_et = Self::get_current_15m_period_et();
+                let slug = MarketDiscovery::build_15m_slug(asset, current_period_et);
                 log::debug!("Trying to find {} market with slug: {}", asset, slug);
                 
                 match self.api.get_market_by_slug(&slug).await {
@@ -930,7 +906,7 @@ impl PreLimitStrategy {
                                                 self.api.get_price(&down_token_id, "SELL")
                                             );
                                             
-                                            let market_end = current_period_et + 3600;
+                                            let market_end = current_period_et + MARKET_DURATION_SECS;
                                             let time_remaining = market_end - current_time_et;
                                             let minutes = if time_remaining > 0 { time_remaining / 60 } else { 0 };
                                             let seconds = if time_remaining > 0 { time_remaining % 60 } else { 0 };

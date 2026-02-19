@@ -27,7 +27,6 @@ pub struct StrategyConfig {
     pub price_limit: f64,
     pub shares: f64,
     pub place_order_before_mins: u64,
-    pub sell_unmatched_after_mins: u64,
     pub check_interval_ms: u64,
     #[serde(default)]
     pub simulation_mode: bool,
@@ -104,7 +103,6 @@ impl Default for Config {
                 price_limit: 0.45,
                 shares: 5.0,
                 place_order_before_mins: 3,
-                sell_unmatched_after_mins: 57,
                 check_interval_ms: 2000,
                 simulation_mode: false,
                 signal: SignalConfig::default(),
